@@ -1,0 +1,245 @@
+---
+title: "Fångstskattning fritidsfiskefällor"
+author: "Sölab"
+date: "`r Sys.Date()`"
+output:
+  word_document: default
+  html_document: default
+---
+
+## Skattning av fångst av lax vid fritidsfiske med fällor
+
+Skattningen av fångsten från fritidsfiskare med egen fiskerätt bjuder på många utmaningar. Den skattning av antalet
+fiskedagar varje fälla har är i sig ganska osäker bland annat på grund av att redskapen eventuellt ligger aktiva
+utan att egentligen fiska efter lax vilket kan göra att antalet faktiska fälldagar överskattas.
+
+Vår ansats är att skatta fångsten genom att anta att fritidsfiskets CPUE korrelerar med yrkesfisket i samma område.
+Problem med det är bland annat att yrkesfiskets statistik inte är 100% pålitlig. Ett annat problem är att det ibland
+inte finns några rapporter från yrkesfisket i vissa områden under en period då fritidsfiskefällor varit aktiva.
+
+Vi delar därför in fritidsfiskefällorna i geografiska områden där det, åtminstone på helår, finns ett större antal rapporter.
+Ur denna helårsfördelning av CPUE väljer vi "lämpliga" percentiler för att representera hög-, mellan- och lågsäsong.
+På detta sätt hoppas vi kunna använda CPUE-värden som dels har en koppling till yrkesfisket i samma område och även
+en koppling till fisket gått totalt under ett år.
+
+### Initiera grundmiljön för detta skript
+
+```{r setup}
+knitr::opts_chunk$set(echo = TRUE)
+options(digits = 2)
+library(dplyr)
+library(ggplot2)
+library(readxl)
+library(writexl)
+source("utils.R") # Defines functions and data structures used in this script
+
+## User defined parameters that you might want to change each year.
+##
+reduce_catch <- .8 # Factor to reduce catch
+datacall_year <- 2025
+catch_year <- 2024
+mean_weight <- 6.845443769268884 # From fishdata.v_mean_logged_weight 2023
+#mean_weight <- 6.692282434901782 # From fishdata.v_mean_logged_weight 2024
+
+```
+
+### Läs effortdata
+
+Läs in alla filer med effort data. Dessa filer innehåller all effortdata inrapporterad av
+yrkesfiskare som använder redskap som antas fiska lax (Push-up och liknande fällor). Area knyts
+raderna på samma sätt som för _traps_long_ ovan.
+
+```{r}
+eff_files <- list.files(path = "data", pattern = "effort-.*xlsx", full.names = TRUE)
+d_list <- lapply(eff_files, read_excel)
+
+CPUE_per_anstr <- slurp_effort(d_list) %>%
+   left_join(ruta2area, by = "RUTA")
+## Test that we dont have commercial traps in squares not belonging to an area
+#CPUE_per_anstr %>% filter(!(RUTA %in% unique(ruta2area$RUTA)))
+
+```
+
+
+
+### Välj CPUE percentiler
+
+Plot över median CPUE per område och månad (åren poolade). Denna plot används som stöd för att tilldela varje
+area/månad-par en percentil som skall användas vid estimeringen (obs varierande skala på y-axeln).
+
+```{r CPUE_everywhere, echo=FALSE}
+CPUE_month <- CPUE_per_anstr %>%
+  group_by(area, Month) %>%
+  summarise(
+    CPUE_sum = sum(N_fish) / sum(Effort),
+    CPUE_mean = mean(CPUE_anstr),
+    CPUE_median = median(CPUE_anstr),
+    N_anstr = n(),
+    .groups = "drop"
+  ) %>%
+  mutate(
+    Area = case_when(
+      area == "gavle" ~ 1,
+      area == "sundsvall" ~ 2,
+      area == "ume" ~ 3,
+      area == "ske" ~ 4,
+      area == "lule" ~ 5,
+      area == "haparanda" ~ 6
+    )
+  ) %>%
+  mutate(Area = factor(
+    Area,
+    labels = c(
+      "Gävle",
+      "Sundsvall",
+      "Umeå",
+      "Skellefteå",
+      "Luleå",
+      "Haparanda"
+    )
+  ))
+
+CPUE_per_month_and_area <- ggplot(CPUE_month, mapping = aes(x=Month, y= CPUE_sum)) +
+  geom_line() + geom_point() +
+  facet_wrap(~Area, scales = "free_y") +
+  xlab("Månad") + ylab("CPUE (medel)") +
+  theme(text=element_text(family="serif"))
+
+CPUE_per_month_and_area # Show figure
+
+#ggsave("CPUE-per-month-and-area.png", CPUE_per_month_and_area)
+
+```
+
+### Läs fälldata
+
+Läs in datafilen med fälldagar per år, RUTA och månad. Mha den fördefinieade listan _ruta2area_ (se utils.R)
+knyts RUTA till ett större område (som antas vara något så när likartade).
+
+Varje rad i _traps_long_  innehåller _antal fälldagar_ per _fälla, månad och år_.
+
+Områden som är definierade är: `r unique(ruta2area$area)`
+
+```{r}
+#traps_long <- read_excel("traps_long.xlsx") %>%
+traps_long <- read_excel("trap_days_long.xlsx", na = c("NA")) %>%
+  filter(!(is.na(RUTA) & Year == 2024)) %>% ## HACK Remove rows with NA RUTA
+  mutate(RUTA = as.numeric(RUTA)) %>%
+  mutate(Days = as.numeric(Days)) %>%
+  left_join(ruta2area, by = "RUTA")
+## Test that we dont have recr traps in squares no belonging to an area
+#traps_long %>% filter(!(RUTA %in% unique(ruta2area$RUTA)))
+```
+
+
+Med ledning från figuren med CPUE-medel över året samt expertkunskap tilldelar vi vilken percentil vi vill använda för 
+fällor i ett specifikt område och månad. Spara vald percentil i _quantile2area_ som sedan kan användas
+för att tilldela en fälla vald percentil.
+
+```{r assign_percentil}
+quantile2area <- traps_long %>%
+  select(area, Month) %>%
+  distinct() %>%
+  mutate(quantile = case_when(
+    area == "gavle" & Month == "May" ~ "60%",
+    area == "gavle" & Month == "June" ~ "60%",
+    area == "gavle" & Month == "July" ~ "30%",
+    area == "gavle" & Month == "August" ~ "10%",
+    area == "haparanda" & Month == "June" ~ "60%",
+    area == "haparanda" & Month == "July" ~ "30%",
+    area == "haparanda" & Month == "August" ~ "10%",
+    area == "lule" & Month == "May" ~ "10%",
+    area == "lule" & Month == "June" ~ "60%",
+    area == "lule" & Month == "July" ~ "60%",
+    area == "lule" & Month == "August" ~ "30%",
+    area == "ske" & Month == "June" ~ "60%",
+    area == "ske" & Month == "July" ~ "30%",
+    area == "ske" & Month == "August" ~ "10%",
+    area == "sundsvall" & Month == "May" ~ "30%",
+    area == "sundsvall" & Month == "June" ~ "60%",
+    area == "sundsvall" & Month == "July" ~ "30%",
+    area == "sundsvall" & Month == "August" ~ "10%",
+    area == "ume" & Month == "June" ~ "60%",
+    area == "ume" & Month == "July" ~ "30%",
+    area == "ume" & Month == "August" ~ "30%",
+    TRUE ~ "Unknown"
+    ))
+
+```
+
+### Skatta fångsten
+
+För varje område och år beräknar vi percentiler från alla inrapporterade yrkesfisken per år
+och område. Variabeln _prob_ innehåller de percentiler vi använder.
+
+```{r}
+prob <- c(.1, .3, .6)
+use_quantiles <- scales::percent(prob)
+quantiles_year_area <- CPUE_per_anstr %>%
+  group_by(Year, area) %>%
+  reframe(quantile = scales::percent(prob),
+            CPUE_q = quantile(CPUE_anstr, probs=prob),
+            N_anstr = n())
+#            .groups = "drop")
+```
+
+
+Fångsten skattas genom att antal fälldagar multipliceras med den CPUE vi valt att plocka ut från
+områdets och årets alla inrapporterade yrkesfisken.
+
+```{r}
+cap <- "Fångst per fälla"
+result <- traps_long %>%
+  left_join(quantile2area, by = c("Month", "area")) %>% # Add the chosen quantile
+  left_join(quantiles_year_area, by = c("Year", "area", "quantile")) %>% # A add CPUE for quantile
+  mutate(N_catch = Days * CPUE_q) %>%
+  mutate(Month = factor(Month, levels = c("May", "June", "July", "August"))) %>%
+  select(Year, Month, area, SUBDIV, RUTA, trap_id, gear_days = Days, quantile, CPUE_q, N_catch) %>%
+  arrange(Year, area, Month)
+
+knitr::kable(result %>% select(-SUBDIV), caption = cap)
+writexl::write_xlsx(result, "catch_per_trap.xlsx")
+
+```
+
+
+Resultatet summerat per subdiv, år och månad (catch_reduced är `r scales::percent(reduce_catch)` av den skattade 
+totalfångsten):
+```{r sum_tab, echo=FALSE}
+cap <- sprintf("Fångst per subdivision och månad. Catch_reduced är minskad till %s av estimat", scales::percent(reduce_catch))
+result_aggr <- result %>%
+  group_by(Year, Month, SUBDIV) %>%
+  summarise(trapdays = sum(gear_days),
+                catch = sum(N_catch),
+            .groups = "drop") %>%
+  mutate(catch_reduced = catch * reduce_catch) %>%
+  arrange(Year, SUBDIV, Month)
+knitr::kable(result_aggr, caption = cap)
+writexl::write_xlsx(result_aggr, "results_per_subdiv.xlsx")
+
+
+WGBAST_res <- result_aggr %>%
+  filter(Year %in% c(catch_year - 1, catch_year)) %>%
+  group_by(Year, Month, SUBDIV) %>%
+  summarise(NUMB = sum(catch_reduced), .groups = "drop") %>%
+  mutate(SPECIES = "SAL", COUNTRY = "SE", YEAR = Year,
+         TIME_PERIOD = case_when(
+           Month == "May" ~ 5,
+           Month == "June" ~ 6,
+           Month == "July" ~ 7,
+           Month == "August" ~ 8),
+          TP_TYPE = "MON", SUB_DIV = as.character(SUBDIV), F_AREA = "C", D_TYPE = "RECR",
+         GEAR = "FYK", WEIGHT = NA, W_TYPE = "EST", NUMB = round(NUMB, 0),
+         N_TYPE = "EST", River = "", NOTES = "", w_ci = "", n_ci = "") %>%
+  mutate(WEIGHT = NUMB * mean_weight / 1000, NOTES = sprintf("WEIGHT = mean w %2.3f", round(mean_weight, 3))) %>%
+  select(SPECIES, COUNTRY, YEAR, TIME_PERIOD, TP_TYPE, SUB_DIV,
+         F_AREA, D_TYPE, GEAR, WEIGHT, W_TYPE, NUMB, N_TYPE, River,
+         NOTES, w_ci, n_ci)
+
+fnam <- sprintf("%d_DC_WGBAST_SE_%d_RECR_Coast.xlsx", datacall_year, catch_year)
+writexl::write_xlsx(WGBAST_res, fnam)
+
+  
+```
+
+

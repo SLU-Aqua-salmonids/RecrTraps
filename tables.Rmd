@@ -1,0 +1,75 @@
+---
+title: "Tabeller"
+output: word_document
+date: "2025-11-19"
+---
+
+```{r setup, include=FALSE}
+library(dplyr)
+library(tidyr)
+library(readxl)
+options(knitr.kable.NA = '-')
+flextable::set_flextable_defaults(border.width = .3)
+
+knitr::opts_chunk$set(echo = TRUE)
+
+# Read data
+d <- read_excel("results_per_subdiv.xlsx")
+# Create summary tables
+d %>% group_by(Year, SUBDIV) %>%
+  summarise(Effort = sum(trapdays),
+            Catch = sum(catch_reduced), .groups = "drop") %>%
+  pivot_wider(names_from = "SUBDIV", values_from = c("Effort", "Catch"),
+              names_sort = FALSE) %>%
+  select(Year, Catch_30, Effort_30, Catch_31, Effort_31)
+# Summarized table for year
+result_table_year <- d %>%
+  group_by(Year, SUBDIV) %>%
+  summarise(Effort = sum(trapdays),
+            Catch = round(sum(catch_reduced),0),
+            .groups = "drop") %>%
+  pivot_wider(names_from = "SUBDIV",
+              values_from = c("Effort", "Catch"),
+              names_sort = FALSE) %>%
+  select(Year, Catch_30, Effort_30, Catch_31, Effort_31)
+# Summarized table for year, month
+result_table_month <- d %>%
+  mutate(Month = factor(Month,
+                        levels = c("May", "June", "July", "August"))) %>%
+  group_by(Year, Month, SUBDIV) %>%
+  summarise(Effort = sum(trapdays),
+            Catch = round(sum(catch_reduced),0),
+            .groups = "drop") %>%
+  pivot_wider(names_from = "SUBDIV",
+              values_from = c("Effort", "Catch"),
+              names_sort = FALSE) %>%
+  select(Year, Month, Catch_30, Effort_30, Catch_31, Effort_31)
+
+# create flextable tables
+
+ft_year <- result_table_year %>%
+  flextable::qflextable() %>%
+  flextable::colformat_num(j = "Year", big.mark = "") %>%
+  flextable::set_caption(caption = "Fångst och insats per subdivision och år") %>%
+  flextable::autofit()
+
+ft_month <- result_table_month %>%
+  flextable::qflextable() %>%
+  flextable::colformat_num(j = "Year", big.mark = "") %>%
+  flextable::set_caption(caption = "Fångst och insats per subdivision år och månad") %>%
+  flextable::autofit()
+
+```
+
+## Tabeller
+
+Exempel på formaterade tabeller
+
+```{r}
+ft_year
+```
+
+```{r}
+ft_month
+```
+
