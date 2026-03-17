@@ -3,6 +3,7 @@ title: "Fångstskattning fritidsfiskefällor"
 author: "Sölab"
 date: "`r Sys.Date()`"
 output:
+  pdf_document: default
   word_document: default
   html_document: default
 ---
@@ -50,11 +51,13 @@ yrkesfiskare som använder redskap som antas fiska lax (Push-up och liknande fä
 raderna på samma sätt som för _traps_long_ ovan.
 
 ```{r}
-eff_files <- list.files(path = "data", pattern = "effort-.*xlsx", full.names = TRUE)
+eff_files <- list.files(path = "data", pattern = "^effort-.*xlsx", full.names = TRUE)
 d_list <- lapply(eff_files, read_excel)
-
 CPUE_per_anstr <- slurp_effort(d_list) %>%
-   left_join(ruta2area, by = "RUTA")
+  left_join(ruta2area, by = "RUTA") %>%
+  filter(RUTA != 5364) %>% # Remove reports from RUTA 5364. In the middle of the Baltic and probably typo
+  filter(!(Area == "Luleå" & Month == 5)) %>% # Remove two reports from Luleå in May, probably typo
+  filter(!(Area == "Haparanda" & Month == 9)) # Remove two reports from Luleå in May, probably typo
 ## Test that we dont have commercial traps in squares not belonging to an area
 #CPUE_per_anstr %>% filter(!(RUTA %in% unique(ruta2area$RUTA)))
 
@@ -69,45 +72,60 @@ area/månad-par en percentil som skall användas vid estimeringen (obs varierand
 
 ```{r CPUE_everywhere, echo=FALSE}
 CPUE_month <- CPUE_per_anstr %>%
-  group_by(area, Month) %>%
+  group_by(Area, Month) %>%
   summarise(
     CPUE_sum = sum(N_fish) / sum(Effort),
     CPUE_mean = mean(CPUE_anstr),
+    CPUE_sd = sd(CPUE_anstr),
+    CPUE_CV = round((sd(CPUE_anstr) / mean(CPUE_anstr) * 100)),
+    CPUE_min = min(CPUE_anstr),
+    CPUE_max = max(CPUE_anstr),
     CPUE_median = median(CPUE_anstr),
     N_anstr = n(),
     .groups = "drop"
-  ) %>%
-  mutate(
-    Area = case_when(
-      area == "gavle" ~ 1,
-      area == "sundsvall" ~ 2,
-      area == "ume" ~ 3,
-      area == "ske" ~ 4,
-      area == "lule" ~ 5,
-      area == "haparanda" ~ 6
-    )
-  ) %>%
-  mutate(Area = factor(
-    Area,
-    labels = c(
-      "Gävle",
-      "Sundsvall",
-      "Umeå",
-      "Skellefteå",
-      "Luleå",
-      "Haparanda"
-    )
-  ))
+  ) 
 
-CPUE_per_month_and_area <- ggplot(CPUE_month, mapping = aes(x=Month, y= CPUE_sum)) +
-  geom_line() + geom_point() +
+# Plot with points an CV
+CPUE_per_month_and_area <- ggplot(
+  CPUE_month,
+  aes(x = Month, y = CPUE_sum)
+) +
+  geom_point() +
+  geom_text(
+    aes(label = CPUE_CV),
+    size =7,
+    size.unit = "pt",
+    nudge_x = 0.15,   # move text slightly right
+    hjust = 0
+  ) +
   facet_wrap(~Area, scales = "free_y") +
-  xlab("Månad") + ylab("CPUE (medel)") +
+  xlab("Månad") +
+  ylab("CPUE (medel)") +
+  theme(
+    text = element_text(family = "serif"),
+    plot.margin = margin(5.5, 30, 5.5, 5.5) # extra right margin
+  ) +
+  coord_cartesian(clip = "off")
+
+# Plot with boxplots for each Area and Month
+boxplot_per_month_area <- ggplot(CPUE_per_anstr, aes(x = factor(Month),
+                                       y = CPUE_anstr,
+                                       group=Month)) +
+  geom_boxplot(fill = "lightgray", outliers = FALSE) +
+  geom_point(
+    data = CPUE_month,
+    aes(x = factor(Month), y = CPUE_sum),
+    color = "red",
+    size = 1.5
+  ) +
+  facet_wrap(~Area, scales = "free_y") +
+  xlab("Månad") + ylab("CPUE (medel och spridning)") +
   theme(text=element_text(family="serif"))
 
-CPUE_per_month_and_area # Show figure
-
-#ggsave("CPUE-per-month-and-area.png", CPUE_per_month_and_area)
+boxplot_per_month_area # Show figure
+ggsave("boxplot-per-month-and-area.png", boxplot_per_month_area)
+#CPUE_per_month_and_area # Show figure
+ggsave("CPUE-per-month-and-area.png", CPUE_per_month_and_area)
 
 ```
 
@@ -118,7 +136,7 @@ knyts RUTA till ett större område (som antas vara något så när likartade).
 
 Varje rad i _traps_long_  innehåller _antal fälldagar_ per _fälla, månad och år_.
 
-Områden som är definierade är: `r unique(ruta2area$area)`
+Områden som är definierade är: `r levels(ruta2area$Area)`
 
 ```{r}
 #traps_long <- read_excel("traps_long.xlsx") %>%
@@ -138,30 +156,30 @@ för att tilldela en fälla vald percentil.
 
 ```{r assign_percentil}
 quantile2area <- traps_long %>%
-  select(area, Month) %>%
+  select(Area, Month) %>%
   distinct() %>%
   mutate(quantile = case_when(
-    area == "gavle" & Month == "May" ~ "60%",
-    area == "gavle" & Month == "June" ~ "60%",
-    area == "gavle" & Month == "July" ~ "30%",
-    area == "gavle" & Month == "August" ~ "10%",
-    area == "haparanda" & Month == "June" ~ "60%",
-    area == "haparanda" & Month == "July" ~ "30%",
-    area == "haparanda" & Month == "August" ~ "10%",
-    area == "lule" & Month == "May" ~ "10%",
-    area == "lule" & Month == "June" ~ "60%",
-    area == "lule" & Month == "July" ~ "60%",
-    area == "lule" & Month == "August" ~ "30%",
-    area == "ske" & Month == "June" ~ "60%",
-    area == "ske" & Month == "July" ~ "30%",
-    area == "ske" & Month == "August" ~ "10%",
-    area == "sundsvall" & Month == "May" ~ "30%",
-    area == "sundsvall" & Month == "June" ~ "60%",
-    area == "sundsvall" & Month == "July" ~ "30%",
-    area == "sundsvall" & Month == "August" ~ "10%",
-    area == "ume" & Month == "June" ~ "60%",
-    area == "ume" & Month == "July" ~ "30%",
-    area == "ume" & Month == "August" ~ "30%",
+    Area == "Gävle" & Month == "May" ~ "60%",
+    Area == "Gävle" & Month == "June" ~ "60%",
+    Area == "Gävle" & Month == "July" ~ "30%",
+    Area == "Gävle" & Month == "August" ~ "10%",
+    Area == "Haparanda" & Month == "June" ~ "60%",
+    Area == "Haparanda" & Month == "July" ~ "30%",
+    Area == "Haparanda" & Month == "August" ~ "10%",
+    Area == "Luleå" & Month == "May" ~ "10%",
+    Area == "Luleå" & Month == "June" ~ "60%",
+    Area == "Luleå" & Month == "July" ~ "60%",
+    Area == "Luleå" & Month == "August" ~ "30%",
+    Area == "Skellefteå" & Month == "June" ~ "60%",
+    Area == "Skellefteå" & Month == "July" ~ "30%",
+    Area == "Skellefteå" & Month == "August" ~ "10%",
+    Area == "Sundsvall" & Month == "May" ~ "30%",
+    Area == "Sundsvall" & Month == "June" ~ "60%",
+    Area == "Sundsvall" & Month == "July" ~ "30%",
+    Area == "Sundsvall" & Month == "August" ~ "10%",
+    Area == "Umeå" & Month == "June" ~ "60%",
+    Area == "Umeå" & Month == "July" ~ "30%",
+    Area == "Umeå" & Month == "August" ~ "30%",
     TRUE ~ "Unknown"
     ))
 
@@ -176,7 +194,7 @@ och område. Variabeln _prob_ innehåller de percentiler vi använder.
 prob <- c(.1, .3, .6)
 use_quantiles <- scales::percent(prob)
 quantiles_year_area <- CPUE_per_anstr %>%
-  group_by(Year, area) %>%
+  group_by(Year, Area) %>%
   reframe(quantile = scales::percent(prob),
             CPUE_q = quantile(CPUE_anstr, probs=prob),
             N_anstr = n())
@@ -190,12 +208,12 @@ områdets och årets alla inrapporterade yrkesfisken.
 ```{r}
 cap <- "Fångst per fälla"
 result <- traps_long %>%
-  left_join(quantile2area, by = c("Month", "area")) %>% # Add the chosen quantile
-  left_join(quantiles_year_area, by = c("Year", "area", "quantile")) %>% # A add CPUE for quantile
+  left_join(quantile2area, by = c("Month", "Area")) %>% # Add the chosen quantile
+  left_join(quantiles_year_area, by = c("Year", "Area", "quantile")) %>% # A add CPUE for quantile
   mutate(N_catch = Days * CPUE_q) %>%
   mutate(Month = factor(Month, levels = c("May", "June", "July", "August"))) %>%
-  select(Year, Month, area, SUBDIV, RUTA, trap_id, gear_days = Days, quantile, CPUE_q, N_catch) %>%
-  arrange(Year, area, Month)
+  select(Year, Month, Area, SUBDIV, RUTA, trap_id, gear_days = Days, quantile, CPUE_q, N_catch) %>%
+  arrange(Year, Area, Month)
 
 knitr::kable(result %>% select(-SUBDIV), caption = cap)
 writexl::write_xlsx(result, "catch_per_trap.xlsx")
