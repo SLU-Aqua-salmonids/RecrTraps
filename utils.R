@@ -2,27 +2,36 @@ library(dplyr)
 
 
 ruta2area <- tribble(
-  ~RUTA, ~area,
-  5062, "gavle",
-  5063, "gavle",
-  5162, "sundsvall",
-  5262, "sundsvall",
-  5362, "sundsvall",
-#  5364, "sundsvall",
-  5462, "sundsvall",
-  5463, "sundsvall",
-  5563, "sundsvall",
-  5564, "sundsvall",
-  5665, "ume",
-  5766, "ske",
-  5866, "ske",
-  6067, "lule",
-  5966, "lule",
-  5967, "lule",
-  5968, "lule",
-  6068, "haparanda",
-  6069, "haparanda"
+  ~RUTA, ~area_nr,
+  5062, 1,
+  5063, 1,
+  5162, 2,
+  5262, 2,
+  5362, 2,
+#  5364, 2,
+  5462, 2,
+  5463, 2,
+  5563, 2,
+  5564, 2,
+  5665, 3,
+  5766, 3,
+  5866, 4,
+  6067, 5,
+  5966, 5,
+  5967, 5,
+  5968, 5,
+  6068, 6,
+  6069, 6
 )
+ruta2area$Area <- factor(ruta2area$area_nr,
+                         labels = c(
+                           "Gävle",
+                           "Sundsvall",
+                           "Umeå",
+                           "Skellefteå",
+                           "Luleå",
+                           "Haparanda"
+                         ))
 Area2subdiv <- tribble(
   ~FishingArea, ~subdiv,
   "27.3.d.29", 29,
@@ -60,7 +69,7 @@ calc_CPUE_per_month <- function(anstr, squares) {
 calc_CPUE_quantiles <-  function(anstr, probs) {
   res <- anstr %>%
 #    filter(RUTA %in% squares) %>%
-    group_by(Year, area) %>%
+    group_by(Year, Area) %>%
     summarise(quantile = scales::percent(probs),
               CPUE_q = quantile(CPUE_anstr, probs=prob),
               .groups = "drop")
