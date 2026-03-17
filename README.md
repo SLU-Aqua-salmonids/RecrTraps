@@ -3,4 +3,4 @@
  - *create_yearly_effort_file.R* förbereder data filer med yrkesfiskets fångster som input
  - *traps2long.R* formatera input till önskat format
  - *utils.R* diverse R-funktioner
- - *estimate_recr_traps_YYYY.docx* resultat från analyser
+ - *estimate_recr_traps.pdf* beskrivning, skript-snuttar och resultat från analyser
